@@ -3,7 +3,7 @@ import math
 
 class Diffusion:
     
-    def __init__(self, noise_steps=50, beta_start=0.0001, beta_end=0.5, l=10, fs=250, device="cuda"):
+    def __init__(self, noise_steps=50, beta_start=0.0001, beta_end=0.5, l=10, fs=250):
         self.noise_steps = noise_steps
         self.beta_start = beta_start
         self.beta_end = beta_end
@@ -11,11 +11,9 @@ class Diffusion:
         self.l = l
         self.fs = fs
 
-        self.beta_schedule = self.prepare_noise_schedule().to(device)
-        self.alpha = 1. - self.beta
+        self.beta_schedule = self.prepare_noise_schedule()
+        self.alpha = 1. - self.beta_schedule
         self.alpha_hat = torch.cumprod(self.alpha, dim=0)
-
-        self.device = device
 
     def prepare_noise_schedule(self):
 

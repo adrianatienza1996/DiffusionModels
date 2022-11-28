@@ -4,15 +4,19 @@ import numpy as np
 
 class Diffusion:
     
-    def __init__(self, noise_steps=50, beta_start=0.0001, beta_end=0.5, l=10, fs=250):
+    def __init__(self, noise_steps=50, beta_start=0.0001, beta_end=0.5, l=10, fs=250, enc_dim=128):
         self.noise_steps = noise_steps
         self.beta_start = beta_start
         self.beta_end = beta_end
+
+        self.enc_dim = enc_dim
 
         self.l = l
         self.fs = fs
 
         self.beta_schedule = self.prepare_noise_schedule()
+        self.time_embeddings = self.create_time_embeddings()
+
         self.alpha = 1. - self.beta_schedule
         self.alpha_hat = torch.cumprod(self.alpha, dim=0)
 
@@ -25,6 +29,18 @@ class Diffusion:
 
         beta_schedule = [cuadratic_scheme(self, t) for t in range(self.noise_steps)]
         return torch.tensor(beta_schedule)
+
+    def create_time_embeddings(self):
+        sin_emb = np.zeros((self.noise_steps, self.enc_dim//2))
+        cos_emb = np.zeros((self.noise_steps, self.enc_dim//2))
+
+        for i in range(sin_emb.shape[0]):
+            for j in range(sin_emb.shape[1]):
+                sin_emb[i, j] = np.sin(math.pow(10, (j * 4 / 63)) * i)
+                cos_emb[i, j] = np.cos(math.pow(10, (j * 4 / 63)) * i)
+
+        time_embeddings = np.concatenate([sin_emb, cos_emb], axis = 1)
+        return time_embeddings
 
     def noise_signal(self, x):
         # x is (4 x fs * l) dim . (ECG, BP, EEG, Resp)
@@ -43,10 +59,13 @@ class Diffusion:
 
         t, mask = sample_t_and_mask(self)
 
-        sqrt_alpha_hat = torch.sqrt(self.alpha_hat[t])[:, None, None]
-        sqrt_one_minus_alpha_hat = torch.sqrt(1 - self.alpha_hat[t])[:, None, None]
-        
-        Ɛ = torch.randn_like(x) * mask
-        
-        return sqrt_alpha_hat * x + sqrt_one_minus_alpha_hat * Ɛ, Ɛ, mask
+        sqrt_alpha_hat = torch.sqrt(self.alpha_hat[t])
+        sqrt_one_minus_alpha_hat = torch.sqrt(1 - self.alpha_hat[t])
+       
+        Ɛ = np.random.randn(x.shape[0], x.shape[1]) * mask
+        tmp_time_embeddings = self.time_embeddings[t, :]
+
+        x_co = x * (1 - mask) 
+        x_t = sqrt_alpha_hat * x + sqrt_one_minus_alpha_hat * Ɛ * mask
+        return x_t, x_co, Ɛ, mask, tmp_time_embeddings
 

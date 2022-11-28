@@ -146,22 +146,27 @@ class ResidualBlock(nn.Module):
 
 
 class CSDI(nn.Module):
-    def __init__(self, num_res_blocks, number_heads, model_dim, emb_dim, side_dim, do_prob):
+    def __init__(self, l, fs, num_features, num_res_blocks, number_heads, model_dim, emb_dim, time_dim, feat_dim, do_prob):
         super(CSDI, self).__init__()
         
         self.num_res_blocks = num_res_blocks
+        
+        self.l = l
+        self.fs = fs
+
+        self.time_dim = time_dim
+        self.num_features = num_features
 
         self.x_conv = nn.Conv2d(in_channels=2, out_channels=model_dim, kernel_size=1, stride=1, padding=0)
         self.diff_linear = nn.Sequential(
                                 nn.Linear(in_features=emb_dim, out_features=emb_dim),
                                 nn.SiLU())
-
         net = nn.ModuleList()
         for _ in range(num_res_blocks):
             net.append(ResidualBlock(number_heads=number_heads,
                                      model_dim=model_dim,
                                      emb_dim=emb_dim,
-                                     side_dim=side_dim,
+                                     side_dim=time_dim + feat_dim,
                                      do_prob=do_prob))
 
         self.net = net
@@ -169,6 +174,11 @@ class CSDI(nn.Module):
                             nn.Conv2d(in_channels=model_dim, out_channels=model_dim, kernel_size=1, stride=1, padding=0),
                             nn.ReLU(),
                             nn.Conv2d(in_channels=model_dim, out_channels=1, kernel_size=1, stride=1, padding=0))
+
+        self.feat_emb = nn.Embedding(num_embeddings=num_features, embedding_dim=feat_dim)
+        
+        time_embeddings = self.get_time_embeddings()
+        self.register_buffer('time_embeddings', time_embeddings)
 
         
     def forward(self, xco, xta, diff_emb, time_emb, feature_emb, mask):
@@ -182,6 +192,7 @@ class CSDI(nn.Module):
 
         time_emb = repeat(time_emb, "b l c -> b k l c", k = k)
         feature_emb = repeat(feature_emb, "b k c -> b k l c", l = l)
+        
         side_emb = torch.cat([time_emb, feature_emb, mask], dim = -1)
         side_emb = rearrange(side_emb, "b k l c -> b c k l")
 
@@ -200,3 +211,26 @@ class CSDI(nn.Module):
 
         return output
         
+
+    def get_time_embeddings(self):
+        position_id = torch.arange(0, self.fs * self.l).unsqueeze(1)
+
+        freq = repeat(torch.arange(0, self.time_dim // 2, dtype=torch.float), "l -> (k l)", k = 2) / (self.time_dim / 2)
+        freq = torch.pow(10000, -freq)
+
+        positional_encodings_table = freq * position_id
+
+        positional_encodings_table[:, :self.time_dim//2] = torch.sin(positional_encodings_table[:, :self.time_dim//2]) 
+        positional_encodings_table[:, self.time_dim//2:] = torch.cos(positional_encodings_table[:, self.time_dim//2:]) 
+        return positional_encodings_table
+
+    def get_side_embeddings(self, x):
+        time_embeddings = self.time_embeddings
+        print(time_embeddings.shape)
+        feature_embeddings = self.feat_emb(torch.arange(self.num_features))
+        print(feature_embeddings.shape)
+
+
+
+
+

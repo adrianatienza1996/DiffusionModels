@@ -126,3 +126,9 @@ dmypy.json
 
 # Jupyter Notebook Scripts
 *.ipynb
+
+# Tensorboard Logs
+logs
+
+# Model Saved
+CSDI/Saved_Model

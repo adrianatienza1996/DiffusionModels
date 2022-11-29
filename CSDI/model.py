@@ -45,7 +45,7 @@ class MultiHead_Attention(nn.Module):
         output = torch.matmul(output, v)
         output = self.concat(output)
         output = self.block_output(output)
-        return attention, self.output_drop_out(output)
+        return self.output_drop_out(output)
 
 
 class FeedForwardNet(nn.Module):
@@ -89,7 +89,7 @@ class TransformerLayer(nn.Module):
 
     def forward(self, x):
         res = x
-        attention, h = self.mh_atten_block(x, x, x)
+        h = self.mh_atten_block(x, x, x)
         h = self.add_norm_mh(h, res)
         
         res = h
@@ -100,12 +100,15 @@ class TransformerLayer(nn.Module):
 
 class ResidualBlock(nn.Module):
 
-    def __init__(self, number_heads, model_dim, emb_dim, side_dim, do_prob):
+    def __init__(self, strips_lenght, number_heads, model_dim, emb_dim, side_dim, do_prob):
         super(ResidualBlock, self).__init__()
-        self.temporal_reshape = Rearrange("b c k l -> (b l) k c")
+
+        self.strips_lenght = strips_lenght
+
+        self.temporal_reshape = Rearrange("b c k (l s) -> (b k s) l c", s = strips_lenght)
         self.temporal_transformer = TransformerLayer(number_heads=number_heads, model_dim=model_dim, do_prob=do_prob)
         
-        self.feature_reshape = Rearrange("b c k l -> (b k) l c")
+        self.feature_reshape = Rearrange("b c k (l s) -> (b l) (k s) c", s = strips_lenght)
         self.feature_transformer = TransformerLayer(number_heads=number_heads, model_dim=model_dim, do_prob=do_prob)
         
         self.middle_conv = nn.Conv2d(in_channels=model_dim, out_channels=model_dim * 2, kernel_size=1, stride=1, padding=0)
@@ -124,12 +127,12 @@ class ResidualBlock(nn.Module):
         h = x + diff_emb
         h = self.temporal_reshape(h)
         h = self.temporal_transformer(h)
-        h = rearrange(h, "(b l) k c -> b c k l", b = b, l = l)
+        h = rearrange(h, "(b k s) l c -> b c k (l s)", b = b, l = l // self.strips_lenght, s = self.strips_lenght)
 
         h = self.feature_reshape(h)
         h = self.feature_transformer(h)
-        h = rearrange(h, "(b k) l c -> b c k l", b = b, k = k)
-        
+        h = rearrange(h, "(b l) (k s) c -> b c k (l s)", b = b, k = k, s = self.strips_lenght)
+
         h = self.middle_conv(h)
 
         side_emb = self.side_conv(side_emb)
@@ -142,11 +145,11 @@ class ResidualBlock(nn.Module):
         res, out = torch.chunk(h, chunks=2, dim=1)
         res = res + x / math.sqrt(2.0)
 
-        return res, out    
+        return res, out  
 
 
 class CSDI(nn.Module):
-    def __init__(self, l, fs, num_features, num_res_blocks, number_heads, model_dim, emb_dim, time_dim, feat_dim, do_prob):
+    def __init__(self, l, fs, strips_lenght, num_features, num_res_blocks, number_heads, model_dim, emb_dim, time_dim, feat_dim, do_prob):
         super(CSDI, self).__init__()
         
         self.num_res_blocks = num_res_blocks
@@ -163,10 +166,11 @@ class CSDI(nn.Module):
                                 nn.SiLU())
         net = nn.ModuleList()
         for _ in range(num_res_blocks):
-            net.append(ResidualBlock(number_heads=number_heads,
+            net.append(ResidualBlock(strips_lenght=strips_lenght,
+                                     number_heads=number_heads,
                                      model_dim=model_dim,
                                      emb_dim=emb_dim,
-                                     side_dim=time_dim + feat_dim,
+                                     side_dim=time_dim + feat_dim + 1,
                                      do_prob=do_prob))
 
         self.net = net
@@ -181,7 +185,7 @@ class CSDI(nn.Module):
         self.register_buffer('time_embeddings', time_embeddings)
 
         
-    def forward(self, xco, xta, diff_emb, time_emb, feature_emb, mask):
+    def forward(self, xco, xta, diff_emb, mask):
         b, _, k, l = xco.shape
 
         x = torch.cat([xco, xta], dim=1)
@@ -190,10 +194,9 @@ class CSDI(nn.Module):
         diff_emb = self.diff_linear(diff_emb)
         diff_emb = rearrange(diff_emb, "b k l c -> b c k l")
 
-        time_emb = repeat(time_emb, "b l c -> b k l c", k = k)
-        feature_emb = repeat(feature_emb, "b k c -> b k l c", l = l)
+        side_emb = self.get_side_embeddings(x)
         
-        side_emb = torch.cat([time_emb, feature_emb, mask], dim = -1)
+        side_emb = torch.cat([side_emb, mask], dim = -1)
         side_emb = rearrange(side_emb, "b k l c -> b c k l")
 
         cum_out = 0
@@ -225,12 +228,13 @@ class CSDI(nn.Module):
         return positional_encodings_table
 
     def get_side_embeddings(self, x):
-        time_embeddings = self.time_embeddings
-        print(time_embeddings.shape)
-        feature_embeddings = self.feat_emb(torch.arange(self.num_features))
-        print(feature_embeddings.shape)
+        b, c, k, l = x.shape
+        time_embeddings = self.time_embeddings.to(device)
+        time_embeddings = repeat(time_embeddings, "l c -> k l c", k = k)
+        
+        feature_embeddings = self.feat_emb(torch.arange(self.num_features).to(device))
+        feature_embeddings = repeat(feature_embeddings, "k c -> k l c", l = l)
 
-
-
-
-
+        side_embeddings = torch.cat([time_embeddings, feature_embeddings], dim=-1)
+        side_embeddings = repeat(side_embeddings, "k l c -> b k l c", b = b)
+        return side_embeddings

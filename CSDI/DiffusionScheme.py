@@ -18,7 +18,7 @@ class Diffusion:
         self.time_embeddings = self.create_time_embeddings()
 
         self.alpha = 1. - self.beta_schedule
-        self.alpha_hat = torch.cumprod(self.alpha, dim=0)
+        self.alpha_hat = np.cumprod(self.alpha, axis=0)
 
     def prepare_noise_schedule(self):
 
@@ -28,7 +28,7 @@ class Diffusion:
             return math.pow(first_term + second_term, 2)
 
         beta_schedule = [cuadratic_scheme(self, t) for t in range(self.noise_steps)]
-        return torch.tensor(beta_schedule)
+        return np.array(beta_schedule)
 
     def create_time_embeddings(self):
         sin_emb = np.zeros((self.noise_steps, self.enc_dim//2))
@@ -59,13 +59,14 @@ class Diffusion:
 
         t, mask = sample_t_and_mask(self)
 
-        sqrt_alpha_hat = torch.sqrt(self.alpha_hat[t])
-        sqrt_one_minus_alpha_hat = torch.sqrt(1 - self.alpha_hat[t])
+        sqrt_alpha_hat = np.sqrt(self.alpha_hat[t])
+        sqrt_one_minus_alpha_hat = np.sqrt(1 - self.alpha_hat[t])
        
         Ɛ = np.random.randn(x.shape[0], x.shape[1]) * mask
         tmp_time_embeddings = self.time_embeddings[t, :]
 
         x_co = x * (1 - mask) 
         x_t = sqrt_alpha_hat * x + sqrt_one_minus_alpha_hat * Ɛ * mask
+        
         return x_t, x_co, Ɛ, mask, tmp_time_embeddings
 

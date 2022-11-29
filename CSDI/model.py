@@ -7,8 +7,6 @@ from einops.layers.torch import Rearrange
 from einops import repeat, rearrange
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-print(device)
-
 
 class MultiHead_Attention(nn.Module):
 
@@ -212,7 +210,7 @@ class CSDI(nn.Module):
         output = rearrange(output, "b c k l -> b k l c")
         output = output * mask
 
-        return output
+        return output.squeeze()
         
 
     def get_time_embeddings(self):

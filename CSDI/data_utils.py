@@ -2,7 +2,7 @@ import torch
 import pandas as pd
 import numpy as np
 import os
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 
 from DiffusionScheme import Diffusion
 
@@ -54,3 +54,21 @@ class MIT_PSG_Diffusion_Dataset(Dataset):
         diff_emb = torch.tensor(diff_emb).float().to(device)
         
         return x_co, x_t, noise, mask, diff_emb
+
+
+def train_batch(batch, model, loss_fn, optimizer):
+    
+    optimizer.zero_grad()
+    model.train()
+
+    x_co, x_t, noise, mask, diff_emb = batch
+
+    noise_prediction = model(x_co, x_t, diff_emb, mask)
+    noise_prediction = noise_prediction * mask.squeeze()
+
+    batch_loss = loss_fn(noise_prediction, noise)
+    batch_loss.backward()
+    
+    optimizer.step()
+    
+    return batch_loss.item()

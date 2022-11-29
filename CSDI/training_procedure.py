@@ -8,13 +8,14 @@ from torch.optim import Adam
 
 from tqdm import tqdm 
 
-from data_utils import MIT_PSG_Diffusion_Dataset, train_batch
+from data_utils import train_batch, val_batch, get_data_loaders
 from model import CSDI
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(device)
 
 EPOCHS = 200
+TEST_STUDIES = ['slp14', 'slp61']
 
 
 ###########################################################################################################################################################
@@ -44,41 +45,50 @@ ecg_file = "psg_ecg_signals_resampled_normalized.csv"
 bp_file = "psg_bp_signals_resampled_normalized.csv"
 eeg_file = "psg_eeg_signals_resampled_normalized.csv"
 resp_file = "psg_resp_signals_resampled_normalized.csv"
+anno_file = "psg_annotations.csv"
 
-train = MIT_PSG_Diffusion_Dataset(data_path=data_path,
-                                  ecg_file=ecg_file,
-                                  bp_file=bp_file,
-                                  eeg_file=eeg_file,
-                                  resp_file=resp_file)
-
-train_dl = DataLoader(train, batch_size=16, shuffle=True)
-
+train_dl, test_dl = get_data_loaders(data_path, ecg_file, bp_file, eeg_file, resp_file, anno_file, TEST_STUDIES, batch_size=16)
 
 ###########################################################################################################################################################
 ############################################################ TRAINING PROCEDURE ###########################################################################
 ###########################################################################################################################################################
 
 loss_fn = torch.nn.MSELoss()
-loss = []
-optimizer = Adam(model.parameters(), lr=0.001, weight_decay=1e-6)
-best_loss = 999999
 
-writer = SummaryWriter(log_dir="logs/training_loss")
+optimizer = Adam(model.parameters(), lr=0.001, weight_decay=1e-6)
+best_loss = 9999999
+
+lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, 
+                                                    milestones=[int(0.75 * EPOCHS), int(0.9 * EPOCHS)], 
+                                                    gamma=0.1)
+
+writer = SummaryWriter(log_dir="logs/losses")
+
 for step, epoch in enumerate(range(EPOCHS)):
     print("Epoch: ", str(epoch))
-    epoch_loss = []
+    epoch_loss, val_loss = [], []
+    
     for batch in tqdm(iter(train_dl)):
-
         batch_loss = train_batch(batch, model, loss_fn, optimizer)
         epoch_loss.append(batch_loss)
 
     epoch_loss = np.array(epoch_loss).mean()
-    print("Epoch Loss: " + str(epoch_loss))
-    loss.append(epoch_loss)
+    print("Epoch Training Loss: " + str(epoch_loss))
     writer.add_scalar("Training Loss", epoch_loss, global_step=step)
 
-    if epoch_loss < best_loss:
-        best_loss = epoch_loss
+    for batch in tqdm(iter(test_dl)):
+        batch_val_loss = val_batch(batch, model, loss_fn)
+        val_loss.append(batch_val_loss)
+
+    val_loss = np.array(val_loss).mean()
+    print("Epoch Validation Loss: " + str(val_loss))
+    writer.add_scalar("Validation Loss", val_loss, global_step=step)
+
+
+    if val_loss < best_loss:
+        best_loss = val_loss
         torch.save(model.to("cpu").state_dict(), "Saved_Model/csdi_model.pth")
         model.to(device)
         print("Model Saved")
+
+    lr_scheduler.step()

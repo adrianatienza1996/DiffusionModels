@@ -2,29 +2,20 @@ import torch
 import pandas as pd
 import numpy as np
 import os
-from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, Dataset
 
 from DiffusionScheme import Diffusion
-
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 class MIT_PSG_Diffusion_Dataset(Dataset):
     
-    def __init__(self, data_path, ecg_file, bp_file, eeg_file, resp_file, fs=75, l=10, noise_steps=50, b_low=0.0001, b_high=0.5, diff_dim=128, device="cuda"):
+    def __init__(self, ecg_signals, bp_signals, eeg_signals, resp_signals, fs=75, l=10, noise_steps=50, b_low=0.0001, b_high=0.5, diff_dim=128, device="cuda"):
 
-        ecg_signals_path = os.path.join(data_path, ecg_file)
-        bp_signals_path = os.path.join(data_path, bp_file)
-        eeg_signals_path = os.path.join(data_path, eeg_file)
-        resp_signals_path = os.path.join(data_path, resp_file)
-
-        print("Loading CSV files")
-
-        self.ecg_csv = np.array(pd.read_csv(ecg_signals_path), dtype=np.float32)
-        self.bp_csv = np.array(pd.read_csv(bp_signals_path), dtype=np.float32)
-        self.eeg_csv = np.array(pd.read_csv(eeg_signals_path), dtype=np.float32)
-        self.resp_csv = np.array(pd.read_csv(resp_signals_path), dtype=np.float32)
-        
-        print("Loading CSV files Finished")
+        self.ecg_csv = np.array(ecg_signals, dtype=np.float32)
+        self.bp_csv = np.array(bp_signals, dtype=np.float32)
+        self.eeg_csv = np.array(eeg_signals, dtype=np.float32)
+        self.resp_csv = np.array(resp_signals, dtype=np.float32)
+    
         
         self.diffusion = Diffusion(noise_steps=noise_steps, 
                                    beta_start=b_low, 
@@ -56,6 +47,53 @@ class MIT_PSG_Diffusion_Dataset(Dataset):
         return x_co, x_t, noise, mask, diff_emb
 
 
+def get_data_loaders(data_path, ecg_file, bp_file, eeg_file, resp_file, anno_file, test_studies, batch_size=16):
+
+    ecg_signals_path = os.path.join(data_path, ecg_file)
+    bp_signals_path = os.path.join(data_path, bp_file)
+    eeg_signals_path = os.path.join(data_path, eeg_file)
+    resp_signals_path = os.path.join(data_path, resp_file)
+    anno_path = os.path.join(data_path, anno_file)
+
+    print("Loading CSV files")
+
+    ecg_csv = np.array(pd.read_csv(ecg_signals_path), dtype=np.float32)
+    bp_csv = np.array(pd.read_csv(bp_signals_path), dtype=np.float32)
+    eeg_csv = np.array(pd.read_csv(eeg_signals_path), dtype=np.float32)
+    resp_csv = np.array(pd.read_csv(resp_signals_path), dtype=np.float32)
+    anno_csv = pd.read_csv(anno_path)
+
+    print("Loading CSV files Finished")
+
+    idx_train, idx_test = [], []
+
+    for i in range(anno_csv.shape[0]):
+        if anno_csv.loc[i, "File"] in test_studies:
+            idx_test.append(i)
+
+        else:
+            idx_train.append(i)
+
+    ecg_train = ecg_csv[idx_train, :]
+    ecg_test  = ecg_csv[idx_test, :]
+
+    bp_train = bp_csv[idx_train, :]
+    bp_test  = bp_csv[idx_test, :]
+
+    eeg_train = eeg_csv[idx_train, :]
+    eeg_test  = eeg_csv[idx_test, :]
+
+    resp_train = resp_csv[idx_train, :]
+    resp_test  = resp_csv[idx_test, :]
+
+    train = MIT_PSG_Diffusion_Dataset(ecg_train, bp_train, eeg_train, resp_train)
+    test = MIT_PSG_Diffusion_Dataset(ecg_test, bp_test, eeg_test, resp_test)
+
+    train_dl = DataLoader(train, batch_size=batch_size, shuffle=True)
+    test_dl = DataLoader(test, batch_size=batch_size, shuffle=False)
+
+    return train_dl, test_dl
+
 def train_batch(batch, model, loss_fn, optimizer):
     
     optimizer.zero_grad()
@@ -71,4 +109,17 @@ def train_batch(batch, model, loss_fn, optimizer):
     
     optimizer.step()
     
+    return batch_loss.item()
+
+
+def val_batch(batch, model, loss_fn):
+    
+    model.eval()
+
+    x_co, x_t, noise, mask, diff_emb = batch
+
+    noise_prediction = model(x_co, x_t, diff_emb, mask)
+    noise_prediction = noise_prediction * mask.squeeze()
+
+    batch_loss = loss_fn(noise_prediction, noise)
     return batch_loss.item()

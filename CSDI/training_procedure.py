@@ -1,4 +1,5 @@
 import numpy as np
+import os
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
@@ -8,7 +9,7 @@ from torch.optim import Adam
 
 from tqdm import tqdm 
 
-from data_utils import train_batch, val_batch, get_data_loaders
+from data_utils import train_batch, val_batch, get_data_loaders, mse_loss
 from model import CSDI
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -52,8 +53,8 @@ train_dl, test_dl = get_data_loaders(data_path, ecg_file, bp_file, eeg_file, res
 ###########################################################################################################################################################
 ############################################################ TRAINING PROCEDURE ###########################################################################
 ###########################################################################################################################################################
-
-loss_fn = torch.nn.MSELoss()
+saved_model_pat = "C:/Users/adria\Desktop/Repositories/DiffusionModels/CSDI/Saved_Model/csdi_model.pth"
+loss_fn = mse_loss()
 
 optimizer = Adam(model.parameters(), lr=0.001, weight_decay=1e-6)
 best_loss = 9999999
@@ -62,10 +63,11 @@ lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
                                                     milestones=[int(0.75 * EPOCHS), int(0.9 * EPOCHS)], 
                                                     gamma=0.1)
 
+
 writer = SummaryWriter(log_dir="logs/losses")
 
 for step, epoch in enumerate(range(EPOCHS)):
-    print("Epoch: ", str(epoch))
+    print("\n\nEpoch: ", str(epoch))
     epoch_loss, val_loss = [], []
     
     for batch in tqdm(iter(train_dl)):
@@ -87,7 +89,7 @@ for step, epoch in enumerate(range(EPOCHS)):
 
     if val_loss < best_loss:
         best_loss = val_loss
-        torch.save(model.to("cpu").state_dict(), "Saved_Model/csdi_model.pth")
+        torch.save(model.to("cpu").state_dict(), saved_model_pat)
         model.to(device)
         print("Model Saved")
 

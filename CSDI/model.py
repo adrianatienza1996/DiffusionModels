@@ -119,8 +119,9 @@ class ResidualBlock(nn.Module):
     def forward(self, x, diff_emb, side_emb):
         b, c, k, l = x.shape
 
-        diff_emb = self.diff_emb_conv(diff_emb).squeeze()
-        diff_emb = repeat(diff_emb, "b c -> b c k l", k = k, l = l)
+        diff_emb = repeat(diff_emb, "b c -> b c d1 d2", d1 = 1, d2 = 1) 
+        diff_emb = self.diff_emb_conv(diff_emb)
+        diff_emb = repeat(diff_emb, "b c d1 d2-> b c (d1 k) (d2 l)", k = k, l = l)
         
         h = x + diff_emb
         h = self.temporal_reshape(h)
@@ -190,8 +191,6 @@ class CSDI(nn.Module):
         x = self.x_conv(x)
 
         diff_emb = self.diff_linear(diff_emb)
-        diff_emb = rearrange(diff_emb, "b k l c -> b c k l")
-
         side_emb = self.get_side_embeddings(x)
         
         side_emb = torch.cat([side_emb, mask], dim = -1)
@@ -210,7 +209,7 @@ class CSDI(nn.Module):
         output = rearrange(output, "b c k l -> b k l c")
         output = output * mask
 
-        return output.squeeze()
+        return output
         
 
     def get_time_embeddings(self):

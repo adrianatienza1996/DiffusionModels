@@ -1,4 +1,6 @@
 import torch
+import torch.nn as nn
+
 import pandas as pd
 import numpy as np
 import os
@@ -36,7 +38,7 @@ class MIT_PSG_Diffusion_Dataset(Dataset):
         tmp_x = np.concatenate([tmp_ecg, tmp_bp, tmp_eeg, tmp_resp], axis = 0)
 
         x_t, x_co, noise, mask, diff_emb = self.diffusion.noise_signal(tmp_x) 
-        diff_emb = diff_emb.reshape(1, 1, -1)
+        diff_emb = diff_emb.reshape(-1)
 
         x_co = torch.tensor(x_co).unsqueeze(0).float().to(device)
         x_t = torch.tensor(x_t).unsqueeze(0).float().to(device)
@@ -102,9 +104,9 @@ def train_batch(batch, model, loss_fn, optimizer):
     x_co, x_t, noise, mask, diff_emb = batch
 
     noise_prediction = model(x_co, x_t, diff_emb, mask)
-    noise_prediction = noise_prediction * mask.squeeze()
+    noise_prediction = noise_prediction.squeeze() * mask.squeeze()
 
-    batch_loss = loss_fn(noise_prediction, noise)
+    batch_loss = loss_fn(noise_prediction, noise, mask)
     batch_loss.backward()
     
     optimizer.step()
@@ -119,7 +121,20 @@ def val_batch(batch, model, loss_fn):
     x_co, x_t, noise, mask, diff_emb = batch
 
     noise_prediction = model(x_co, x_t, diff_emb, mask)
-    noise_prediction = noise_prediction * mask.squeeze()
+    noise_prediction = noise_prediction.squeeze() * mask.squeeze()
 
-    batch_loss = loss_fn(noise_prediction, noise)
+    batch_loss = loss_fn(noise_prediction, noise, mask)
     return batch_loss.item()
+
+
+class mse_loss(nn.Module):
+    def __init__(self) :
+        super(mse_loss, self).__init__()
+
+    def forward(self, noise, noise_pre, mask):
+        
+        tmp_loss = torch.pow(torch.abs(noise - noise_pre), 2)
+        tmp_loss = torch.sum(tmp_loss)
+        tmp_den = torch.sum(mask)
+
+        return tmp_loss / tmp_den

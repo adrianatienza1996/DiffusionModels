@@ -98,15 +98,16 @@ class TransformerLayer(nn.Module):
 
 class ResidualBlock(nn.Module):
 
-    def __init__(self, strips_lenght, number_heads, model_dim, emb_dim, side_dim, do_prob):
+    def __init__(self, temp_strips_blocks, feat_strips_lenght, number_heads, model_dim, emb_dim, side_dim, do_prob):
         super(ResidualBlock, self).__init__()
 
-        self.strips_lenght = strips_lenght
+        self.temp_strips_blocks = temp_strips_blocks
+        self.feat_strips_lenght = feat_strips_lenght
 
-        self.temporal_reshape = Rearrange("b c k (l s) -> (b k s) l c", s = strips_lenght)
+        self.temporal_reshape = Rearrange("b c k (s l) -> (b s k) l c", s = temp_strips_blocks)
         self.temporal_transformer = TransformerLayer(number_heads=number_heads, model_dim=model_dim, do_prob=do_prob)
         
-        self.feature_reshape = Rearrange("b c k (l s) -> (b l) (k s) c", s = strips_lenght)
+        self.feature_reshape = Rearrange("b c k (l s) -> (b l) (k s) c", s = feat_strips_lenght)
         self.feature_transformer = TransformerLayer(number_heads=number_heads, model_dim=model_dim, do_prob=do_prob)
         
         self.middle_conv = nn.Conv2d(in_channels=model_dim, out_channels=model_dim * 2, kernel_size=1, stride=1, padding=0)
@@ -126,11 +127,11 @@ class ResidualBlock(nn.Module):
         h = x + diff_emb
         h = self.temporal_reshape(h)
         h = self.temporal_transformer(h)
-        h = rearrange(h, "(b k s) l c -> b c k (l s)", b = b, l = l // self.strips_lenght, s = self.strips_lenght)
+        h = rearrange(h, "(b s k) l c -> b c k (s l)", b = b, l = l // self.temp_strips_blocks, s = self.temp_strips_blocks)
 
         h = self.feature_reshape(h)
         h = self.feature_transformer(h)
-        h = rearrange(h, "(b l) (k s) c -> b c k (l s)", b = b, k = k, s = self.strips_lenght)
+        h = rearrange(h, "(b l) (k s) c -> b c k (l s)", b = b, k = k, s = self.feat_strips_lenght)
 
         h = self.middle_conv(h)
 
@@ -148,7 +149,7 @@ class ResidualBlock(nn.Module):
 
 
 class CSDI(nn.Module):
-    def __init__(self, l, fs, strips_lenght, num_features, num_res_blocks, number_heads, model_dim, emb_dim, time_dim, feat_dim, do_prob):
+    def __init__(self, l, fs, temp_strips_blocks, feat_strips_lenght, num_features, num_res_blocks, number_heads, model_dim, emb_dim, time_dim, feat_dim, do_prob):
         super(CSDI, self).__init__()
         
         self.num_res_blocks = num_res_blocks
@@ -165,7 +166,8 @@ class CSDI(nn.Module):
                                 nn.SiLU())
         net = nn.ModuleList()
         for _ in range(num_res_blocks):
-            net.append(ResidualBlock(strips_lenght=strips_lenght,
+            net.append(ResidualBlock(temp_strips_blocks=temp_strips_blocks,
+                                     feat_strips_lenght=feat_strips_lenght,
                                      number_heads=number_heads,
                                      model_dim=model_dim,
                                      emb_dim=emb_dim,

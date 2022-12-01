@@ -96,20 +96,22 @@ def get_data_loaders(data_path, ecg_file, bp_file, eeg_file, resp_file, anno_fil
 
     return train_dl, test_dl
 
-def train_batch(batch, model, loss_fn, optimizer):
+def train_batch(batch, model, loss_fn, optimizer, scaler):
     
-    optimizer.zero_grad()
     model.train()
 
     x_co, x_t, noise, mask, diff_emb = batch
 
     noise_prediction = model(x_co, x_t, diff_emb, mask)
-    noise_prediction = noise_prediction.squeeze() * mask.squeeze()
 
-    batch_loss = loss_fn(noise_prediction, noise, mask)
-    batch_loss.backward()
+    with torch.cuda.amp.autocast():
+        noise_prediction = noise_prediction.squeeze() * mask.squeeze()
+        batch_loss = loss_fn(noise_prediction, noise, mask)
     
-    optimizer.step()
+    optimizer.zero_grad()
+    scaler.scale(batch_loss).backward()
+    scaler.step(optimizer)
+    scaler.update()
     
     return batch_loss.item()
 
@@ -133,7 +135,7 @@ class mse_loss(nn.Module):
 
     def forward(self, noise, noise_pre, mask):
         
-        tmp_loss = torch.pow(torch.abs(noise - noise_pre), 2)
+        tmp_loss = torch.pow(noise - noise_pre, 2)
         tmp_loss = torch.sum(tmp_loss)
         tmp_den = torch.sum(mask)
 

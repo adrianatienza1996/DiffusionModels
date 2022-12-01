@@ -23,7 +23,8 @@ TEST_STUDIES = ['slp14', 'slp61']
 ########################################################### MODEL INITIALIZATION ##########################################################################
 ###########################################################################################################################################################
 
-model = CSDI(strips_lenght=5,
+model = CSDI(temp_strips_blocks=2,
+             feat_strips_lenght=10,
              l = 10,
              fs=75,
              num_features=4,
@@ -53,6 +54,7 @@ train_dl, test_dl = get_data_loaders(data_path, ecg_file, bp_file, eeg_file, res
 ###########################################################################################################################################################
 ############################################################ TRAINING PROCEDURE ###########################################################################
 ###########################################################################################################################################################
+
 saved_model_pat = "C:/Users/adria\Desktop/Repositories/DiffusionModels/CSDI/Saved_Model/csdi_model.pth"
 loss_fn = mse_loss()
 
@@ -63,6 +65,8 @@ lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
                                                     milestones=[int(0.75 * EPOCHS), int(0.9 * EPOCHS)], 
                                                     gamma=0.1)
 
+scaler = torch.cuda.amp.GradScaler()
+
 
 writer = SummaryWriter(log_dir="logs/losses")
 
@@ -71,7 +75,7 @@ for step, epoch in enumerate(range(EPOCHS)):
     epoch_loss, val_loss = [], []
     
     for batch in tqdm(iter(train_dl)):
-        batch_loss = train_batch(batch, model, loss_fn, optimizer)
+        batch_loss = train_batch(batch, model, loss_fn, optimizer, scaler)
         epoch_loss.append(batch_loss)
 
     epoch_loss = np.array(epoch_loss).mean()

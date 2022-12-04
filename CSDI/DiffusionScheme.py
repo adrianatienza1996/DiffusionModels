@@ -49,7 +49,7 @@ class Diffusion:
             t = np.random.randint(1, self.noise_steps)
 
             # Hidden percentaje between (10%, 90%) of the ECG Signal
-            first_index = np.random.randint(0, int(np.round(0.9 * self.fs * self.l)))
+            first_index = np.random.randint(0, int(np.round(0.40 * self.fs * self.l)))
             second_index = np.random.randint(first_index + int(np.round(0.1 * self.fs * self.l)), int(self.fs * self.l))
 
             mask = np.zeros_like(x)
@@ -66,7 +66,8 @@ class Diffusion:
         tmp_time_embeddings = self.time_embeddings[t, :]
 
         x_co = x * (1 - mask) 
-        x_t = sqrt_alpha_hat * x + sqrt_one_minus_alpha_hat * Ɛ * mask
+        x_t = sqrt_alpha_hat * x + sqrt_one_minus_alpha_hat * Ɛ
+        x_t = x_t * mask
         
         return x_t, x_co, Ɛ, mask, tmp_time_embeddings
 

@@ -38,15 +38,18 @@ class MIT_PSG_Diffusion_Dataset(Dataset):
         tmp_x = np.concatenate([tmp_ecg, tmp_bp, tmp_eeg, tmp_resp], axis = 0)
 
         x_t, x_co, noise, mask, diff_emb = self.diffusion.noise_signal(tmp_x) 
+        
         diff_emb = diff_emb.reshape(-1)
+        mask_co = 1 - mask.copy()
 
         x_co = torch.tensor(x_co).unsqueeze(0).float().to(device)
         x_t = torch.tensor(x_t).unsqueeze(0).float().to(device)
         noise = torch.tensor(noise).float().to(device)
         mask = torch.tensor(mask).unsqueeze(-1).float().to(device)
+        mask_co = torch.tensor(mask_co).unsqueeze(-1).float().to(device)
         diff_emb = torch.tensor(diff_emb).float().to(device)
         
-        return x_co, x_t, noise, mask, diff_emb
+        return x_co, x_t, noise, mask, mask_co, diff_emb
 
 
 def get_data_loaders(data_path, ecg_file, bp_file, eeg_file, resp_file, anno_file, test_studies, batch_size=16):
@@ -100,11 +103,11 @@ def train_batch(batch, model, loss_fn, optimizer, scaler):
     
     model.train()
 
-    x_co, x_t, noise, mask, diff_emb = batch
+    x_co, x_t, noise, mask, mask_co, diff_emb = batch
 
-    noise_prediction = model(x_co, x_t, diff_emb, mask)
+    noise_prediction = model(x_co, x_t, diff_emb, mask_co)
 
-    with torch.cuda.amp.autocast():
+    with torch.cuda.amp.autocast(dtype=torch.float16):
         noise_prediction = noise_prediction.squeeze() * mask.squeeze()
         batch_loss = loss_fn(noise_prediction, noise, mask)
     
@@ -112,7 +115,7 @@ def train_batch(batch, model, loss_fn, optimizer, scaler):
     scaler.scale(batch_loss).backward()
     scaler.step(optimizer)
     scaler.update()
-    
+
     return batch_loss.item()
 
 
@@ -120,9 +123,9 @@ def val_batch(batch, model, loss_fn):
     
     model.eval()
 
-    x_co, x_t, noise, mask, diff_emb = batch
+    x_co, x_t, noise, mask, mask_co, diff_emb = batch
 
-    noise_prediction = model(x_co, x_t, diff_emb, mask)
+    noise_prediction = model(x_co, x_t, diff_emb, mask_co)
     noise_prediction = noise_prediction.squeeze() * mask.squeeze()
 
     batch_loss = loss_fn(noise_prediction, noise, mask)

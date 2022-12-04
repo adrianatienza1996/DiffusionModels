@@ -186,16 +186,16 @@ class CSDI(nn.Module):
         self.register_buffer('time_embeddings', time_embeddings)
 
         
-    def forward(self, xco, xta, diff_emb, mask):
+    def forward(self, xco, xta, diff_emb, mask_co):
         b, _, k, l = xco.shape
 
         x = torch.cat([xco, xta], dim=1)
         x = self.x_conv(x)
 
-        diff_emb = self.diff_linear(diff_emb)
+        diff_emb = self.diff_linear(diff_emb)   
         side_emb = self.get_side_embeddings(x)
         
-        side_emb = torch.cat([side_emb, mask], dim = -1)
+        side_emb = torch.cat([side_emb, mask_co], dim = -1)
         side_emb = rearrange(side_emb, "b k l c -> b c k l")
 
         cum_out = 0
@@ -209,9 +209,8 @@ class CSDI(nn.Module):
         output = self.out_net(cum_out)
         
         output = rearrange(output, "b c k l -> b k l c")
-        output = output * mask
 
-        return output
+        return output * (1 - mask_co)
         
 
     def get_time_embeddings(self):

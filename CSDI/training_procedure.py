@@ -23,12 +23,12 @@ TEST_STUDIES = ['slp14', 'slp61']
 ########################################################### MODEL INITIALIZATION ##########################################################################
 ###########################################################################################################################################################
 
-model = CSDI(temp_strips_blocks=2,
-             feat_strips_lenght=10,
+model = CSDI(temp_strips_blocks=1,
+             feat_strips_lenght=5,
              l = 10,
              fs=75,
              num_features=4,
-             num_res_blocks=4,
+             num_res_blocks=2,
              number_heads=8,
              model_dim=64,
              emb_dim=128,
@@ -55,15 +55,16 @@ train_dl, test_dl = get_data_loaders(data_path, ecg_file, bp_file, eeg_file, res
 ############################################################ TRAINING PROCEDURE ###########################################################################
 ###########################################################################################################################################################
 
-saved_model_pat = "C:/Users/adria\Desktop/Repositories/DiffusionModels/CSDI/Saved_Model/csdi_model.pth"
-weights_path = "C:/Users/adria/Desktop/Repositories/DiffusionModels/CSDI/Saved_Model/csdi_model.pth"
-model.load_state_dict(torch.load(weights_path))
+saved_model_pat = "C:/Users/adria\Desktop/Repositories/DiffusionModels/CSDI/Saved_Model/csdi_model_1_strip.pth"
+saved_last_model_pat = "C:/Users/adria\Desktop/Repositories/DiffusionModels/CSDI/Saved_Model/csdi_last_model_1_strip.pth"
+# weights_path = "C:/Users/adria/Desktop/Repositories/DiffusionModels/CSDI/Saved_Model/csdi_model.pth"
+# model.load_state_dict(torch.load(weights_path))
 
-current_epoch = 10
+current_epoch = 0
 loss_fn = mse_loss()
 
 optimizer = Adam(model.parameters(), lr=0.001, weight_decay=1e-6)
-best_loss = 9999999
+best_loss = 0.9
 best_epoch = -1
 
 lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, 
@@ -104,4 +105,7 @@ for epoch in range(current_epoch, EPOCHS):
         best_epoch = epoch
         print("Model Saved")
 
+    torch.save(model.to("cpu").state_dict(), saved_last_model_pat)
+    model.to(device)
+    
     lr_scheduler.step()

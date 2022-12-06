@@ -137,7 +137,6 @@ class mse_loss(nn.Module):
         super(mse_loss, self).__init__()
 
     def forward(self, noise, noise_pre, mask):
-        
         tmp_loss = torch.pow(noise - noise_pre, 2)
         tmp_loss = torch.sum(tmp_loss)
         tmp_den = torch.sum(mask)

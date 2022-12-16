@@ -123,3 +123,15 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Jupyter Notebook Scripts
+*.ipynb
+
+# Tensorboard Logs
+logs
+
+# Model Saved
+CSDI/Saved_Model
+
+# Model Saved
+CSDI/Figures

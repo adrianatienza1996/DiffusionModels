@@ -9,33 +9,44 @@ from torch.optim import Adam
 
 from tqdm import tqdm 
 
-from data_utils import train_batch, val_batch, get_data_loaders, mse_loss
+from data_utils import train_batch, val_batch, get_data_loaders
 from model import CSDI
+
+import matplotlib.pyplot as plt
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(device)
 
-EPOCHS = 200
+EPOCHS = 100
 TEST_STUDIES = ['slp14', 'slp61']
+FS = 100
+L = 2.5
 
 
 ###########################################################################################################################################################
 ########################################################### MODEL INITIALIZATION ##########################################################################
 ###########################################################################################################################################################
 
-model = CSDI(temp_strips_blocks=1,
-             feat_strips_lenght=5,
-             l = 10,
-             fs=75,
-             num_features=4,
-             num_res_blocks=2,
-             number_heads=8,
-             model_dim=64,
-             emb_dim=128,
-             time_dim=128,
-             feat_dim=16,
-             do_prob=0.1).to(device)
+model = CSDI(noise_steps=50, 
+             l = L, 
+             fs = FS, 
+             beta_start=0.0001,
+             beta_end=0.5,
+             temp_strips_blocks = 1, 
+             feat_strips_lenght = 1, 
+             num_features = 4, 
+             num_res_blocks = 4, 
+             number_heads = 8, 
+             model_dim = 64,
+             emb_dim = 128, 
+             time_dim = 128, 
+             feat_dim = 16, 
+             do_prob = 0.1).to(device)
 
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+print("Number of Trainable Parameters of the model: " + str(count_parameters(model)))
 
 ###########################################################################################################################################################
 ######################################################## DATALOADER INITIALIZATION ########################################################################
@@ -43,25 +54,36 @@ model = CSDI(temp_strips_blocks=1,
 
 data_path = "C:/Users/adria/Desktop/Repositories/Physionet Datasets/CSV Data"
 
-ecg_file = "psg_ecg_signals_resampled_normalized.csv"
-bp_file = "psg_bp_signals_resampled_normalized.csv"
-eeg_file = "psg_eeg_signals_resampled_normalized.csv"
-resp_file = "psg_resp_signals_resampled_normalized.csv"
-anno_file = "psg_annotations.csv"
+ecg_file = "psg_ecg_signals_2.5_s.csv"
+bp_file = "psg_bp_signals_2.5_s.csv"
+eeg_file = "psg_eeg_signals_2.5_s.csv"
+resp_file = "psg_resp_signals_2.5_s.csv"
+anno_file = "psg_annotations_2.5_s.csv"
 
-train_dl, test_dl = get_data_loaders(data_path, ecg_file, bp_file, eeg_file, resp_file, anno_file, TEST_STUDIES, batch_size=12)
+
+train_dl, test_dl, fixed_input = get_data_loaders(data_path, ecg_file, bp_file, eeg_file, resp_file, anno_file, TEST_STUDIES, fs=FS, l=L, batch_size=16)
+
+###########################################################################################################################################################
+############################################################ TRAINING VISUALIZATION #######################################################################
+###########################################################################################################################################################
+
+
+save_figures_path = "C:/Users/adria/Desktop/Repositories/DiffusionModels/CSDI/Figures"
+labels = ["ECG", "BP", "EEG", "Resp"]
+mask = np.zeros_like(fixed_input)
+
+mask[0, int(FS * L * 0.75) :] = 1
 
 ###########################################################################################################################################################
 ############################################################ TRAINING PROCEDURE ###########################################################################
 ###########################################################################################################################################################
 
-saved_model_pat = "C:/Users/adria\Desktop/Repositories/DiffusionModels/CSDI/Saved_Model/csdi_model_1_strip.pth"
-saved_last_model_pat = "C:/Users/adria\Desktop/Repositories/DiffusionModels/CSDI/Saved_Model/csdi_last_model_1_strip.pth"
+saved_model_pat = "C:/Users/adria\Desktop/Repositories/DiffusionModels/CSDI/Saved_Model/csdi_model_2.5_s.pth"
+saved_last_model_pat = "C:/Users/adria\Desktop/Repositories/DiffusionModels/CSDI/Saved_Model/csdi_last_model_2.5_s.pth"
 # weights_path = "C:/Users/adria/Desktop/Repositories/DiffusionModels/CSDI/Saved_Model/csdi_model.pth"
 # model.load_state_dict(torch.load(weights_path))
 
 current_epoch = 0
-loss_fn = mse_loss()
 
 optimizer = Adam(model.parameters(), lr=0.001, weight_decay=1e-6)
 best_loss = 0.9
@@ -81,7 +103,7 @@ for epoch in range(current_epoch, EPOCHS):
     epoch_loss, val_loss = [], []
     
     for batch in tqdm(iter(train_dl)):
-        batch_loss = train_batch(batch, model, loss_fn, optimizer, scaler)
+        batch_loss = train_batch(batch, model, optimizer, scaler)
         epoch_loss.append(batch_loss)
 
     epoch_loss = np.array(epoch_loss).mean()
@@ -89,7 +111,7 @@ for epoch in range(current_epoch, EPOCHS):
     writer.add_scalar("Training Loss", epoch_loss, global_step=epoch)
 
     for batch in tqdm(iter(test_dl)):
-        batch_val_loss = val_batch(batch, model, loss_fn)
+        batch_val_loss = val_batch(batch, model)
         val_loss.append(batch_val_loss)
 
     val_loss = np.array(val_loss).mean()
@@ -109,3 +131,25 @@ for epoch in range(current_epoch, EPOCHS):
     model.to(device)
     
     lr_scheduler.step()
+
+    # Visualization    
+    x_t, x_co = model.impute(fixed_input, mask)
+    x_t = x_t.squeeze().numpy()
+    x_co = x_co.squeeze().numpy()
+
+    plt.figure(figsize=(18, 24))
+
+    time = np.arange(x_t.shape[1]) / FS
+
+    for i in range(4):
+        plt.subplot(4, 1, i + 1)
+        plt.plot(time[x_co[i, :] != 0], x_co[i, x_co[i, :] != 0])
+        plt.plot(time[x_t[i, :] != 0], x_t[i, x_t[i, :] != 0])
+        plt.title(labels[i] + " Signal")    
+        plt.xlabel("Time (s)")
+        plt.ylim(-10, 10)
+    
+    figure_name = str(epoch) + ".jpg"
+    figure_path = os.path.join(save_figures_path, figure_name)
+    plt.savefig(figure_path)
+    plt.close('all')

@@ -3,8 +3,10 @@ import torch.nn as nn
 
 import math
 from einops.layers.torch import Rearrange
-
+import torch.nn.functional as F
 from einops import repeat, rearrange
+
+import numpy as np
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -96,6 +98,59 @@ class TransformerLayer(nn.Module):
         return self.add_norm_ffn(h, res)
 
 
+class DiffusionEmbedding(nn.Module):
+    def __init__(self, num_steps, embedding_dim=128):
+        super().__init__()
+
+        embedding = self._build_embedding(num_steps, embedding_dim / 2)
+        
+        self.register_buffer("embedding", embedding)
+
+        self.projection1 = nn.Linear(embedding_dim, embedding_dim)
+        self.projection2 = nn.Linear(embedding_dim, embedding_dim)
+
+    def forward(self, diffusion_step):
+        x = self.embedding[diffusion_step]
+        x = self.projection1(x)
+        x = F.silu(x)
+        x = self.projection2(x)
+        x = F.silu(x)
+        return x
+
+    def _build_embedding(self, num_steps, dim):
+        steps = torch.arange(num_steps).unsqueeze(1)
+        frequencies = 10.0 ** (torch.arange(dim) / (dim - 1) * 4.0).unsqueeze(0)
+        table = steps * frequencies 
+        table = torch.cat([torch.sin(table), torch.cos(table)], dim=1)
+        return table
+
+
+class Conv1d(nn.Module):
+    def __init__(self, channels_in, channels_out, kernel_size, use_act=True):
+        super(Conv1d, self).__init__()
+        self.conv_layer = nn.Conv1d(in_channels=channels_in,
+                                    out_channels=channels_out,
+                                    kernel_size=kernel_size,
+                                    stride=1,
+                                    padding=0)   
+        self.bn = nn.BatchNorm1d(num_features=channels_out)
+        nn.init.kaiming_normal_(self.conv_layer.weight)
+
+        self.use_act = use_act
+
+    def forward(self, x):
+        b, c, k, l = x.shape
+        h = rearrange(x, "b c k l -> b c (k l)")
+        h = self.conv_layer(h)
+        h = self.bn(h)
+        
+        if self.use_act:
+            h = F.relu(h)
+        
+        h = rearrange(h, "b c (k l) -> b c k l", k = k, l = l)
+        return h
+    
+
 class ResidualBlock(nn.Module):
 
     def __init__(self, temp_strips_blocks, feat_strips_lenght, number_heads, model_dim, emb_dim, side_dim, do_prob):
@@ -107,21 +162,21 @@ class ResidualBlock(nn.Module):
         self.temporal_reshape = Rearrange("b c k (s l) -> (b s k) l c", s = temp_strips_blocks)
         self.temporal_transformer = TransformerLayer(number_heads=number_heads, model_dim=model_dim, do_prob=do_prob)
         
-        self.feature_reshape = Rearrange("b c k (l s) -> (b l) (k s) c", s = feat_strips_lenght)
+        self.feature_reshape = Rearrange("b c k (s l) -> (b l) (k s) c", s = feat_strips_lenght)
         self.feature_transformer = TransformerLayer(number_heads=number_heads, model_dim=model_dim, do_prob=do_prob)
         
-        self.middle_conv = nn.Conv2d(in_channels=model_dim, out_channels=model_dim * 2, kernel_size=1, stride=1, padding=0)
-        self.out_conv = nn.Conv2d(in_channels=model_dim, out_channels=model_dim * 2, kernel_size=1, stride=1, padding=0)
+        self.middle_conv = Conv1d(channels_in=model_dim, channels_out=model_dim * 2, kernel_size=1)
+        self.out_conv = Conv1d(channels_in=model_dim, channels_out=model_dim * 2, kernel_size=1)
 
-        self.diff_emb_conv = nn.Conv2d(in_channels=emb_dim, out_channels=model_dim, kernel_size=1, stride=1, padding=0)
-        self.side_conv = nn.Conv2d(in_channels=side_dim, out_channels=2 * model_dim, kernel_size=1, stride=1, padding=0)
+        self.diff_emb_projection = nn.Linear(in_features=emb_dim, out_features=model_dim)
+        self.side_conv = Conv1d(channels_in=side_dim, channels_out=2 * model_dim, kernel_size=1)
 
 
     def forward(self, x, diff_emb, side_emb):
         b, c, k, l = x.shape
-
-        diff_emb = repeat(diff_emb, "b c -> b c d1 d2", d1 = 1, d2 = 1) 
-        diff_emb = self.diff_emb_conv(diff_emb)
+        
+        diff_emb = self.diff_emb_projection(diff_emb)
+        diff_emb = diff_emb.view(b, -1, 1, 1)
         diff_emb = repeat(diff_emb, "b c d1 d2-> b c (d1 k) (d2 l)", k = k, l = l)
         
         h = x + diff_emb
@@ -149,7 +204,7 @@ class ResidualBlock(nn.Module):
 
 
 class CSDI(nn.Module):
-    def __init__(self, l, fs, temp_strips_blocks, feat_strips_lenght, num_features, num_res_blocks, number_heads, model_dim, emb_dim, time_dim, feat_dim, do_prob):
+    def __init__(self, noise_steps, l, fs, beta_start, beta_end, temp_strips_blocks, feat_strips_lenght, num_features, num_res_blocks, number_heads, model_dim, emb_dim, time_dim, feat_dim, do_prob):
         super(CSDI, self).__init__()
         
         self.num_res_blocks = num_res_blocks
@@ -160,10 +215,19 @@ class CSDI(nn.Module):
         self.time_dim = time_dim
         self.num_features = num_features
 
-        self.x_conv = nn.Conv2d(in_channels=2, out_channels=model_dim, kernel_size=1, stride=1, padding=0)
-        self.diff_linear = nn.Sequential(
-                                nn.Linear(in_features=emb_dim, out_features=emb_dim),
-                                nn.SiLU())
+        self.noise_steps = noise_steps
+        beta = np.linspace(beta_start ** 0.5, beta_end ** 0.5, noise_steps) ** 2
+        alpha = 1 - beta
+        alpha_hat = np.cumprod(alpha)
+
+        self.beta = torch.tensor(beta).float().to(device).view(-1, 1, 1)
+        self.alpha_torch = torch.tensor(alpha).float().to(device).view(-1, 1, 1)
+        self.alpha_hat_torch = torch.tensor(alpha_hat).float().to(device).view(-1, 1, 1)
+        
+
+        self.x_conv = Conv1d(channels_in=2, channels_out=model_dim, kernel_size=1)
+        self.diff_embedding = DiffusionEmbedding(num_steps=noise_steps, embedding_dim=emb_dim)
+
         net = nn.ModuleList()
         for _ in range(num_res_blocks):
             net.append(ResidualBlock(temp_strips_blocks=temp_strips_blocks,
@@ -176,9 +240,8 @@ class CSDI(nn.Module):
 
         self.net = net
         self.out_net = nn.Sequential(
-                            nn.Conv2d(in_channels=model_dim, out_channels=model_dim, kernel_size=1, stride=1, padding=0),
-                            nn.ReLU(),
-                            nn.Conv2d(in_channels=model_dim, out_channels=1, kernel_size=1, stride=1, padding=0))
+                            Conv1d(channels_in=model_dim, channels_out=model_dim, kernel_size=1),
+                            Conv1d(channels_in=model_dim, channels_out=1, kernel_size=1, use_act=False))
 
         self.feat_emb = nn.Embedding(num_embeddings=num_features, embedding_dim=feat_dim)
         
@@ -186,26 +249,25 @@ class CSDI(nn.Module):
         self.register_buffer('time_embeddings', time_embeddings)
 
         
-    def forward(self, xco, xta, diff_emb, mask_co):
-        b, _, k, l = xco.shape
-
-        x = torch.cat([xco, xta], dim=1)
+    def forward(self, x, t, mask_co):
+        b, _, k, l = x.shape
+        
         x = self.x_conv(x)
 
-        diff_emb = self.diff_linear(diff_emb)   
+        diff_emb = self.diff_embedding(t)   
         side_emb = self.get_side_embeddings(x)
         
         side_emb = torch.cat([side_emb, mask_co], dim = -1)
         side_emb = rearrange(side_emb, "b k l c -> b c k l")
 
-        cum_out = 0
+        cum_out = []
         
         for layer in self.net:
             res, out = layer(x, diff_emb, side_emb)
             x = res
-            cum_out = out + cum_out
+            cum_out.append(out)
 
-        cum_out = cum_out / math.sqrt(self.num_res_blocks)
+        cum_out =  torch.sum(torch.stack(cum_out), dim=0) / math.sqrt(self.num_res_blocks)
         output = self.out_net(cum_out)
         
         output = rearrange(output, "b c k l -> b k l c")
@@ -223,7 +285,9 @@ class CSDI(nn.Module):
 
         positional_encodings_table[:, :self.time_dim//2] = torch.sin(positional_encodings_table[:, :self.time_dim//2]) 
         positional_encodings_table[:, self.time_dim//2:] = torch.cos(positional_encodings_table[:, self.time_dim//2:]) 
+
         return positional_encodings_table
+
 
     def get_side_embeddings(self, x):
         b, c, k, l = x.shape
@@ -236,3 +300,43 @@ class CSDI(nn.Module):
         side_embeddings = torch.cat([time_embeddings, feature_embeddings], dim=-1)
         side_embeddings = repeat(side_embeddings, "k l c -> b k l c", b = b)
         return side_embeddings
+
+
+    def impute(self, obs, mask):
+        self.eval()
+
+        K, L = obs.shape
+        x_t = np.random.randn(K, L) * mask
+        
+        mask_co = (1 - mask)
+        x_co = obs * mask_co
+
+        x_co = torch.tensor(x_co).float().view(1, 1, K, L).to(device)
+        x_t = torch.tensor(x_t).float().view(1, 1, K, L).to(device)
+        
+        mask_co = torch.tensor(mask_co).float().view(1, K, L, 1).to(device)
+        mask = torch.tensor(mask).float().view(1, 1, K, L).to(device)
+
+
+        with torch.no_grad():
+        
+            for t in reversed(range(self.noise_steps)):
+
+                x = torch.cat([x_co, x_t], dim=1).to(device)
+                inp_t = torch.tensor(t).long().unsqueeze(0).to(device)
+
+                pred_noise = self(x, inp_t, mask_co).view(1, 1, K, L)
+
+                first_coeff = 1 / torch.sqrt(self.alpha_torch[t])
+                second_coeff = (1 - self.alpha_torch[t]) / torch.sqrt(1 - self.alpha_hat_torch[t])
+
+                x_t =  first_coeff * (x_t - second_coeff * pred_noise)
+                
+                if t > 0:
+                    noise = torch.randn_like(x_t) * mask
+                    sigma = ((1.0 - self.alpha_hat_torch[t - 1]) / (1.0 - self.alpha_hat_torch[t]) * self.beta[t]) ** 0.5
+                    x_t += sigma * noise
+               
+                x_t = x_t * mask
+
+        return x_t.detach().cpu(), x_co.detach().cpu()

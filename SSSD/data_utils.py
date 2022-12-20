@@ -120,25 +120,25 @@ def noisy_imput(tmp_x, model):
 
     x_t = (current_alpha_hat ** 0.5) * x_t + (1.0 - current_alpha_hat) ** 0.5 * noise
     
-    x_t = x_t.unsqueeze(1)
-    x_co = x_co.unsqueeze(1)
+    x_t = x_t.float().to(device)
+    x_co = x_co.float().to(device)
 
-    x = torch.cat([x_co, x_t], dim=1).to(device)
-    tmp_mask = tmp_mask.to(device)
+    tmp_mask = tmp_mask.float().to(device)
     t = t.long()
-    return x, noise, tmp_mask, t
+
+    return x_t, x_co, noise, tmp_mask, t
 
     
 def train_batch(batch, model, optimizer, scaler):
     
     model.train()
     tmp_x = batch
-    x, noise, mask, t = noisy_imput(tmp_x, model)
+    x_t, x_co, noise, mask, t = noisy_imput(tmp_x, model)
 
     mask_co = 1 - mask
-    mask_co = mask_co.unsqueeze(-1).to(device)
+    mask_co = mask_co.to(device)
 
-    noise_prediction = model(x, t, mask_co)
+    noise_prediction = model(x_t, x_co, mask_co, t)
 
     with torch.cuda.amp.autocast(dtype=torch.float16):
         noise_prediction = noise_prediction.squeeze() * mask.squeeze()
@@ -156,12 +156,12 @@ def val_batch(batch, model):
     
     model.eval()
     tmp_x = batch
-    x, noise, mask, t = noisy_imput(tmp_x, model)
+    x_t, x_co, noise, mask, t = noisy_imput(tmp_x, model)
 
     mask_co = 1 - mask
-    mask_co = mask_co.unsqueeze(-1).to(device)
+    mask_co = mask_co.to(device)
 
-    noise_prediction = model(x, t, mask_co)
+    noise_prediction = model(x_t, x_co, mask_co, t)
 
     with torch.cuda.amp.autocast(dtype=torch.float16):
         noise_prediction = noise_prediction.squeeze() * mask.squeeze()

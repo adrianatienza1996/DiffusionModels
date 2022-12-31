@@ -175,3 +175,26 @@ def mse_loss(noise, predicted, target_mask):
     num_eval = target_mask.sum()
     loss = (residual ** 2).sum() / (num_eval if num_eval > 0 else 1)
     return loss
+
+
+class EMA:
+    def __init__(self, beta, start_ema = 2000):
+        self.beta = beta
+        self.step = 0
+        self.start_ema = start_ema
+
+    def update_weights(self, new_model, old_model):
+        for new_params, old_params in zip(new_model.parameters(), old_model.parameters()):
+            new_w, old_w = new_params.data, old_params.data
+            new_params.data = new_w * (1 - self.beta) +  old_w * self.beta
+
+    def copy_params(self, new_model, old_model):
+        new_model.load_state_dict(old_model.state_dict())
+
+    def ema_step(self, new_model, old_model):
+        if self.beta < self.start_ema:
+            self.copy_params(new_model, old_model)
+            self.step += 1
+        else:
+            self.update_weights(new_model, old_model)
+            self.step +=1

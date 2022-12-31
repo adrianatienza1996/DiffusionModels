@@ -9,10 +9,11 @@ from torch.optim import Adam
 
 from tqdm import tqdm 
 
-from data_utils import train_batch, val_batch, get_data_loaders
+from data_utils import train_batch, val_batch, get_data_loaders, EMA
 from model import CSDI
 
 import matplotlib.pyplot as plt
+import copy
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(device)
@@ -21,6 +22,9 @@ EPOCHS = 100
 TEST_STUDIES = ['slp14', 'slp61']
 FS = 100
 L = 2.5
+
+# Use Exponential Moving Average Trick for Updating Weights during Training Loop
+use_EMA = True
 
 
 ###########################################################################################################################################################
@@ -48,6 +52,10 @@ def count_parameters(model):
 
 print("Number of Trainable Parameters of the model: " + str(count_parameters(model)))
 
+if use_EMA:
+    ema = EMA(beta = 0.995)
+    ema_model = copy.deepcopy(model).eval().requires_grad_(False)
+
 ###########################################################################################################################################################
 ######################################################## DATALOADER INITIALIZATION ########################################################################
 ###########################################################################################################################################################
@@ -68,7 +76,7 @@ train_dl, test_dl, fixed_input = get_data_loaders(data_path, ecg_file, bp_file, 
 ###########################################################################################################################################################
 
 
-save_figures_path = "C:/Users/adria/Desktop/Repositories/DiffusionModels/CSDI/Figures"
+save_figures_path = "C:/Users/adria/Desktop/Repositories/DiffusionModels/CSDI/Figures/EMA"
 labels = ["ECG", "BP", "EEG", "Resp"]
 mask = np.zeros_like(fixed_input)
 
@@ -78,16 +86,17 @@ mask[0, int(FS * L * 0.75) :] = 1
 ############################################################ TRAINING PROCEDURE ###########################################################################
 ###########################################################################################################################################################
 
-saved_model_pat = "C:/Users/adria\Desktop/Repositories/DiffusionModels/CSDI/Saved_Model/csdi_model_2.5_s.pth"
-saved_last_model_pat = "C:/Users/adria\Desktop/Repositories/DiffusionModels/CSDI/Saved_Model/csdi_last_model_2.5_s.pth"
-# weights_path = "C:/Users/adria/Desktop/Repositories/DiffusionModels/CSDI/Saved_Model/csdi_model.pth"
+saved_model_pat = "C:/Users/adria\Desktop/Repositories/DiffusionModels/CSDI/Saved_Model/csdi_model_ema.pth"
+saved_last_model_pat = "C:/Users/adria\Desktop/Repositories/DiffusionModels/CSDI/Saved_Model/csdi_last_model_ema.pth"
+
+# weights_path = saved_last_model_pat
 # model.load_state_dict(torch.load(weights_path))
 
 current_epoch = 0
 
 optimizer = Adam(model.parameters(), lr=0.001, weight_decay=1e-6)
-best_loss = 0.9
-best_epoch = -1
+best_loss = 999
+best_epoch = 0
 
 lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, 
                                                     milestones=[int(0.75 * (EPOCHS - current_epoch)), int(0.9 * (EPOCHS - current_epoch))], 
@@ -104,6 +113,9 @@ for epoch in range(current_epoch, EPOCHS):
     
     for batch in tqdm(iter(train_dl)):
         batch_loss = train_batch(batch, model, optimizer, scaler)
+        if use_EMA:
+            ema.ema_step(new_model=model, old_model=ema_model)
+
         epoch_loss.append(batch_loss)
 
     epoch_loss = np.array(epoch_loss).mean()
@@ -111,8 +123,13 @@ for epoch in range(current_epoch, EPOCHS):
     writer.add_scalar("Training Loss", epoch_loss, global_step=epoch)
 
     for batch in tqdm(iter(test_dl)):
-        batch_val_loss = val_batch(batch, model)
-        val_loss.append(batch_val_loss)
+        if use_EMA:
+            batch_val_loss = val_batch(batch, ema_model)
+            val_loss.append(batch_val_loss)
+
+        else:
+            batch_val_loss = val_batch(batch, model)
+            val_loss.append(batch_val_loss)
 
     val_loss = np.array(val_loss).mean()
     print("Epoch Validation Loss: " + str(val_loss))
@@ -122,18 +139,33 @@ for epoch in range(current_epoch, EPOCHS):
 
     if val_loss < best_loss:
         best_loss = val_loss
-        torch.save(model.to("cpu").state_dict(), saved_model_pat)
-        model.to(device)
+        if use_EMA:
+            torch.save(ema_model.to("cpu").state_dict(), saved_model_pat)
+            ema_model.to(device)
+
+        else:
+            torch.save(model.to("cpu").state_dict(), saved_model_pat)
+            model.to(device)
+
         best_epoch = epoch
         print("Model Saved")
 
-    torch.save(model.to("cpu").state_dict(), saved_last_model_pat)
-    model.to(device)
+    if use_EMA:
+        torch.save(ema_model.to("cpu").state_dict(), saved_last_model_pat)
+        ema_model.to(device)
+
+    else:
+        torch.save(model.to("cpu").state_dict(), saved_last_model_pat)
+        model.to(device)
     
     lr_scheduler.step()
 
     # Visualization    
-    x_t, x_co = model.impute(fixed_input, mask)
+    if use_EMA:
+        x_t, x_co = ema_model.impute(fixed_input, mask)
+    else:    
+        x_t, x_co = model.impute(fixed_input, mask)
+    
     x_t = x_t.squeeze().numpy()
     x_co = x_co.squeeze().numpy()
 

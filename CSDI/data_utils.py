@@ -186,10 +186,10 @@ class EMA:
     def update_weights(self, new_model, old_model):
         for new_params, old_params in zip(new_model.parameters(), old_model.parameters()):
             new_w, old_w = new_params.data, old_params.data
-            new_params.data = new_w * (1 - self.beta) +  old_w * self.beta
+            old_model.data = new_w * (1 - self.beta) +  old_w * self.beta
 
     def copy_params(self, new_model, old_model):
-        new_model.load_state_dict(old_model.state_dict())
+        old_model.load_state_dict(new_model.state_dict())
 
     def ema_step(self, new_model, old_model):
         if self.beta < self.start_ema:

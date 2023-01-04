@@ -192,7 +192,9 @@ class EMA:
         old_model.load_state_dict(new_model.state_dict())
 
     def ema_step(self, new_model, old_model):
-        if self.beta < self.start_ema:
+        if self.step == self.start_ema:
+            print("Exponential Moving Average has started")
+        if self.step < self.start_ema:
             self.copy_params(new_model, old_model)
             self.step += 1
         else:

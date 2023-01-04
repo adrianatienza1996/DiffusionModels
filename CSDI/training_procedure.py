@@ -53,7 +53,7 @@ def count_parameters(model):
 print("Number of Trainable Parameters of the model: " + str(count_parameters(model)))
 
 if use_EMA:
-    ema = EMA(beta = 0.995)
+    ema = EMA(beta = 0.95)
     ema_model = copy.deepcopy(model).eval().requires_grad_(False)
 
 ###########################################################################################################################################################
